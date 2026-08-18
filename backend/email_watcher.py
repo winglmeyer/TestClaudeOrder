@@ -21,7 +21,8 @@ import os
 import sys
 import time
 from email.header import decode_header
-from email.message import Message
+from email.message import EmailMessage, Message
+from email.utils import parseaddr
 
 import requests
 
@@ -30,9 +31,11 @@ IMAP_PORT = int(os.environ.get("IMAP_PORT", "993"))
 IMAP_USER = os.environ["IMAP_USER"]
 IMAP_PASSWORD = os.environ["IMAP_PASSWORD"]
 IMAP_FOLDER = os.environ.get("IMAP_FOLDER", "INBOX")
+DRAFTS_FOLDER = os.environ.get("IMAP_DRAFTS_FOLDER", "[Gmail]/Drafts")
 SUBJECT_FILTER = os.environ.get("SUBJECT_FILTER", "Order Enquiry")
 API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "60"))
+COMPANY_NAME = os.environ.get("COMPANY_NAME", "Order Enquiry System")
 
 EXCEL_EXTENSIONS = (".xlsx", ".xls")
 
@@ -61,7 +64,7 @@ def find_excel_attachment(msg: Message) -> tuple[str, bytes] | None:
     return None
 
 
-def import_attachment(filename: str, content: bytes) -> bool:
+def import_attachment(filename: str, content: bytes) -> dict | None:
     content_type = (
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         if filename.lower().endswith(".xlsx")
@@ -74,13 +77,57 @@ def import_attachment(filename: str, content: bytes) -> bool:
     )
     if response.status_code != 200:
         print(f"  Import failed ({response.status_code}): {response.text}")
-        return False
+        return None
 
     result = response.json()
     print(f"  Imported {result['inserted']} row(s), {result['failed']} failed")
     for err in result.get("errors", []):
         print(f"    {err}")
-    return True
+    return result
+
+
+def build_receipt_text(order_ids: list[int]) -> str:
+    """Fetch each imported order back from the API and format a plain-text receipt."""
+    lines = [COMPANY_NAME, "Order Receipt", "", f"{len(order_ids)} order(s) received:", ""]
+    lines.append(
+        f"{'OrderID':<10}{'ProductID':<15}{'Qty':<8}{'Price':<10}{'Line Total':<12}{'Date'}"
+    )
+    total = 0.0
+    for order_id in order_ids:
+        response = requests.get(f"{API_BASE_URL}/api/orders/{order_id}", timeout=30)
+        if response.status_code != 200:
+            continue
+        order = response.json()
+        line_total = order["Qty"] * order["Price"]
+        total += line_total
+        lines.append(
+            f"{order['OrderID']:<10}{order['ProductID']:<15}{order['Qty']:<8}"
+            f"{order['Price']:<10.2f}{line_total:<12.2f}{order['OrderDate']}"
+        )
+    lines.append("")
+    lines.append(f"Total: {total:.2f}")
+    return "\n".join(lines)
+
+
+def create_draft_reply(conn: imaplib.IMAP4_SSL, to_addr: str, subject: str, body: str) -> None:
+    """Save a reply as a draft in the Gmail Drafts folder (not sent automatically)."""
+    if not to_addr:
+        print("  No sender address found; skipping draft.")
+        return
+
+    msg = EmailMessage()
+    msg["From"] = IMAP_USER
+    msg["To"] = to_addr
+    msg["Subject"] = subject
+    msg.set_content(body)
+
+    status, _ = conn.append(
+        DRAFTS_FOLDER, "\\Draft", imaplib.Time2Internaldate(time.time()), msg.as_bytes()
+    )
+    if status == "OK":
+        print(f"  Draft reply saved to {DRAFTS_FOLDER} for {to_addr}.")
+    else:
+        print(f"  Failed to save draft reply: {status}")
 
 
 def process_mailbox() -> None:
@@ -119,8 +166,19 @@ def process_mailbox() -> None:
 
             filename, content = attachment
             print(f"  Found attachment: {filename}")
-            if import_attachment(filename, content):
+            result = import_attachment(filename, content)
+            if result is not None:
                 conn.store(msg_id, "+FLAGS", "\\Seen")
+                order_ids = result.get("order_ids", [])
+                if order_ids:
+                    _, sender_addr = parseaddr(msg.get("From", ""))
+                    receipt_text = build_receipt_text(order_ids)
+                    create_draft_reply(
+                        conn,
+                        to_addr=sender_addr,
+                        subject=f"Re: {subject} - Receipt",
+                        body=receipt_text,
+                    )
     finally:
         try:
             conn.close()

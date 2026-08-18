@@ -136,3 +136,79 @@ button:disabled {
   width: 100%;
   font-size: 0.85rem;
 }
+
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.tabs button {
+  background: transparent;
+  color: #52514e;
+  border: 1px solid #e0e0e0;
+}
+
+.tabs button.active {
+  background: #2563eb;
+  color: #fff;
+  border-color: #2563eb;
+}
+
+.stat-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.stat-tile {
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+}
+
+.stat-label {
+  font-size: 0.8rem;
+  color: #52514e;
+  margin-bottom: 0.35rem;
+}
+
+.stat-value {
+  font-size: 1.6rem;
+  font-weight: 600;
+  color: #0b0b0b;
+}
+
+.bar-chart-wrap {
+  width: 100%;
+}
+
+.bar-chart {
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.bar-chart rect {
+  cursor: pointer;
+  transition: opacity 0.1s ease;
+}
+
+.bar-chart-tooltip {
+  min-height: 1.2rem;
+  font-size: 0.85rem;
+  color: #0b0b0b;
+  margin-top: 0.25rem;
+}
+
+.receipt-link {
+  color: #2563eb;
+  text-decoration: none;
+  font-size: 0.8rem;
+}
+
+.receipt-link:hover {
+  text-decoration: underline;
+}

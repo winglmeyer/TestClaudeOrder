@@ -28,3 +28,24 @@ class ImportResult(BaseModel):
     inserted: int
     failed: int
     errors: list[str]
+    order_ids: list[int] = []
+
+
+class SalesSummary(BaseModel):
+    total_orders: int
+    total_qty: int
+    total_revenue: float
+    avg_order_value: float
+
+
+class SalesByDay(BaseModel):
+    order_date: date
+    revenue: float
+    qty: int
+    order_count: int
+
+
+class TopProduct(BaseModel):
+    product_id: str
+    qty: int
+    revenue: float

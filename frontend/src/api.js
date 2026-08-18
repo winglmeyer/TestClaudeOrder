@@ -59,3 +59,22 @@ export function importOrders(file) {
     body: formData,
   }).then(handleResponse);
 }
+
+export function getReceiptUrl(orderId) {
+  return `${API_BASE}/orders/${orderId}/receipt`;
+}
+
+export function getSalesSummary(filters = {}) {
+  const params = new URLSearchParams(filters);
+  return fetch(`${API_BASE}/sales/summary?${params.toString()}`).then(handleResponse);
+}
+
+export function getSalesByDay(filters = {}) {
+  const params = new URLSearchParams(filters);
+  return fetch(`${API_BASE}/sales/by-day?${params.toString()}`).then(handleResponse);
+}
+
+export function getTopProducts(filters = {}) {
+  const params = new URLSearchParams(filters);
+  return fetch(`${API_BASE}/sales/top-products?${params.toString()}`).then(handleResponse);
+}

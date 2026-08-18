@@ -1,5 +1,6 @@
 from datetime import date
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from . import models, schemas
@@ -70,3 +71,75 @@ def bulk_create_orders(db: Session, orders: list[schemas.OrderCreate]) -> list[m
     for db_order in db_orders:
         db.refresh(db_order)
     return db_orders
+
+
+def _date_filtered(db: Session, date_from: date | None, date_to: date | None):
+    query = db.query(models.Order)
+    if date_from is not None:
+        query = query.filter(models.Order.OrderDate >= date_from)
+    if date_to is not None:
+        query = query.filter(models.Order.OrderDate <= date_to)
+    return query
+
+
+def get_sales_summary(
+    db: Session, date_from: date | None = None, date_to: date | None = None
+) -> dict:
+    row = _date_filtered(db, date_from, date_to).with_entities(
+        func.count(models.Order.OrderID),
+        func.coalesce(func.sum(models.Order.Qty), 0),
+        func.coalesce(func.sum(models.Order.Qty * models.Order.Price), 0.0),
+    ).one()
+    total_orders, total_qty, total_revenue = row
+    avg_order_value = (total_revenue / total_orders) if total_orders else 0.0
+    return {
+        "total_orders": total_orders,
+        "total_qty": total_qty,
+        "total_revenue": total_revenue,
+        "avg_order_value": avg_order_value,
+    }
+
+
+def get_sales_by_day(
+    db: Session, date_from: date | None = None, date_to: date | None = None
+) -> list[dict]:
+    rows = (
+        _date_filtered(db, date_from, date_to)
+        .with_entities(
+            models.Order.OrderDate,
+            func.coalesce(func.sum(models.Order.Qty * models.Order.Price), 0.0),
+            func.coalesce(func.sum(models.Order.Qty), 0),
+            func.count(models.Order.OrderID),
+        )
+        .group_by(models.Order.OrderDate)
+        .order_by(models.Order.OrderDate)
+        .all()
+    )
+    return [
+        {"order_date": order_date, "revenue": revenue, "qty": qty, "order_count": order_count}
+        for order_date, revenue, qty, order_count in rows
+    ]
+
+
+def get_top_products(
+    db: Session,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    limit: int = 10,
+) -> list[dict]:
+    rows = (
+        _date_filtered(db, date_from, date_to)
+        .with_entities(
+            models.Order.ProductID,
+            func.coalesce(func.sum(models.Order.Qty), 0),
+            func.coalesce(func.sum(models.Order.Qty * models.Order.Price), 0.0),
+        )
+        .group_by(models.Order.ProductID)
+        .order_by(func.sum(models.Order.Qty * models.Order.Price).desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {"product_id": product_id, "qty": qty, "revenue": revenue}
+        for product_id, qty, revenue in rows
+    ]

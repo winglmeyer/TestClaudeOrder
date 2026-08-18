@@ -1,3 +1,5 @@
+import { getReceiptUrl } from "../api";
+
 export default function OrderTable({ orders, onEdit, onDelete }) {
   if (orders.length === 0) {
     return <p className="empty-state">No orders found.</p>;
@@ -26,6 +28,14 @@ export default function OrderTable({ orders, onEdit, onDelete }) {
             <td className="row-actions">
               <button onClick={() => onEdit(order)}>Edit</button>
               <button onClick={() => onDelete(order.OrderID)}>Delete</button>
+              <a
+                className="receipt-link"
+                href={getReceiptUrl(order.OrderID)}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Receipt
+              </a>
             </td>
           </tr>
         ))}

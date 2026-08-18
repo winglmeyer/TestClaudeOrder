@@ -136,3 +136,43 @@ def test_import_orders_from_excel(client):
 
     response = client.get("/api/orders", params={"product_id": "P100"})
     assert len(response.json()) == 1
+
+
+def test_sales_summary_and_breakdowns(client):
+    client.post(
+        "/api/orders",
+        json=make_order(product_id="P1", qty=2, price=10, order_date="2026-01-01"),
+    )
+    client.post(
+        "/api/orders",
+        json=make_order(product_id="P2", qty=1, price=5, order_date="2026-01-02"),
+    )
+
+    summary = client.get("/api/sales/summary").json()
+    assert summary["total_orders"] == 2
+    assert summary["total_qty"] == 3
+    assert summary["total_revenue"] == 25.0
+    assert summary["avg_order_value"] == 12.5
+
+    by_day = client.get("/api/sales/by-day").json()
+    assert len(by_day) == 2
+    assert by_day[0]["order_date"] == "2026-01-01"
+    assert by_day[0]["revenue"] == 20.0
+
+    top_products = client.get("/api/sales/top-products").json()
+    assert top_products[0]["product_id"] == "P1"
+    assert top_products[0]["revenue"] == 20.0
+
+
+def test_order_receipt_returns_pdf(client):
+    order_id = client.post("/api/orders", json=make_order()).json()["OrderID"]
+
+    response = client.get(f"/api/orders/{order_id}/receipt")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.content.startswith(b"%PDF")
+
+
+def test_order_receipt_missing_order_returns_404(client):
+    response = client.get("/api/orders/999/receipt")
+    assert response.status_code == 404

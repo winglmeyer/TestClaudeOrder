@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { createOrder, deleteOrder, searchOrders, updateOrder } from "./api";
+import Dashboard from "./components/Dashboard";
 import ImportForm from "./components/ImportForm";
 import OrderForm from "./components/OrderForm";
 import OrderTable from "./components/OrderTable";
 import SearchBar from "./components/SearchBar";
 
 export default function App() {
+  const [tab, setTab] = useState("orders");
   const [orders, setOrders] = useState([]);
   const [filters, setFilters] = useState({});
   const [editingOrder, setEditingOrder] = useState(null);
@@ -54,29 +56,51 @@ export default function App() {
   return (
     <div className="app">
       <h1>Order Enquiry System</h1>
-      {error && <p className="form-error">{error}</p>}
 
-      <section className="panel">
-        <OrderForm
-          editingOrder={editingOrder}
-          onSubmit={handleFormSubmit}
-          onCancel={() => setEditingOrder(null)}
-        />
-      </section>
+      <div className="tabs">
+        <button
+          className={tab === "orders" ? "active" : ""}
+          onClick={() => setTab("orders")}
+        >
+          Orders
+        </button>
+        <button
+          className={tab === "dashboard" ? "active" : ""}
+          onClick={() => setTab("dashboard")}
+        >
+          Dashboard
+        </button>
+      </div>
 
-      <section className="panel">
-        <ImportForm onImported={() => refresh()} />
-      </section>
+      {tab === "dashboard" ? (
+        <Dashboard />
+      ) : (
+        <>
+          {error && <p className="form-error">{error}</p>}
 
-      <section className="panel">
-        <h3>Search Orders</h3>
-        <SearchBar onSearch={handleSearch} />
-        <OrderTable
-          orders={orders}
-          onEdit={setEditingOrder}
-          onDelete={handleDelete}
-        />
-      </section>
+          <section className="panel">
+            <OrderForm
+              editingOrder={editingOrder}
+              onSubmit={handleFormSubmit}
+              onCancel={() => setEditingOrder(null)}
+            />
+          </section>
+
+          <section className="panel">
+            <ImportForm onImported={() => refresh()} />
+          </section>
+
+          <section className="panel">
+            <h3>Search Orders</h3>
+            <SearchBar onSearch={handleSearch} />
+            <OrderTable
+              orders={orders}
+              onEdit={setEditingOrder}
+              onDelete={handleDelete}
+            />
+          </section>
+        </>
+      )}
     </div>
   );
 }

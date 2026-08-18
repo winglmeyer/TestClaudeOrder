@@ -14,3 +14,4 @@ psycopg2-binary
 python-multipart
 openpyxl
 httpx
+fpdf2

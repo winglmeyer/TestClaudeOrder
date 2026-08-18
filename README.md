@@ -1,8 +1,10 @@
 # Order Enquiry System
 
-A small order enquiry app: a FastAPI backend backed by SQLite, a React frontend
-for searching/entering/importing orders, and an IMAP watcher that ingests
-Excel attachments from "Order Enquiry" emails.
+A small order enquiry app: a FastAPI backend backed by SQLite/Postgres, a React
+frontend for searching/entering/importing orders and viewing a sales
+dashboard, and an IMAP watcher that ingests Excel attachments from
+"Order Enquiry" emails, generates a PDF receipt per order, and drafts a reply
+email (saved to the mailbox's Drafts folder, never auto-sent).
 
 Order table columns: `OrderID, ProductID, Qty, Price, OrderDate`.
 
@@ -24,7 +26,12 @@ Endpoints:
 - `GET /api/orders/{id}` / `PUT /api/orders/{id}` / `DELETE /api/orders/{id}`
 - `POST /api/orders/import` — upload an Excel file (multipart `file`) with columns
   `OrderID, ProductID, Qty, Price, OrderDate`; rows are validated and inserted,
-  a per-row error list is returned for anything that fails to parse
+  a per-row error list and the list of inserted `order_ids` is returned
+- `GET /api/orders/{id}/receipt` — a one-page PDF receipt for the order
+- `GET /api/sales/summary` — total orders, qty, revenue, avg order value
+  (optional `date_from`/`date_to`)
+- `GET /api/sales/by-day` — revenue/qty/order count grouped by day
+- `GET /api/sales/top-products` — qty/revenue grouped by product, highest revenue first
 
 Config via environment variables (see `backend/.env.example`): `DATABASE_URL`, `CORS_ORIGINS`.
 
@@ -36,11 +43,15 @@ npm install
 npm run dev
 ```
 
-Opens on http://localhost:5173. Lets you add an order, import an Excel file,
-and search/edit/delete existing orders. The dev server proxies `/api` calls
-to the backend on port 8000.
+Opens on http://localhost:5173. Two tabs:
+- **Orders** — add an order, import an Excel file, search/edit/delete existing
+  orders, and download each order's PDF receipt
+- **Dashboard** — stat tiles (total orders/revenue/avg order value) plus
+  revenue-by-day and top-products charts, filterable by date range
 
-## Email watcher
+The dev server proxies `/api` calls to the backend on port 8000.
+
+## Email watcher (Gmail integration)
 
 Polls a mailbox by IMAP for unread emails with "Order Enquiry" in the subject,
 pulls the first `.xlsx`/`.xls` attachment from each, and POSTs it to the
@@ -48,9 +59,16 @@ backend's `/api/orders/import` endpoint — the same path used by the frontend's
 import form. An email is marked read only after a successful import, so
 failures are retried on the next poll.
 
-Copy `backend/.env.example` to `backend/.env`, fill in your IMAP host/credentials
-(for Gmail/Outlook, use an app password rather than your account password),
-then run:
+After a successful import, the watcher fetches the newly inserted orders back
+from the API, builds a plain-text receipt, and saves it as a **draft** reply
+(via IMAP APPEND to `IMAP_DRAFTS_FOLDER`, default `[Gmail]/Drafts`) addressed
+to the original sender — it is never sent automatically, so a person reviews
+and sends it from Gmail.
+
+Copy `backend/.env.example` to `backend/.env`, fill in your Gmail IMAP
+credentials (`imap.gmail.com`, and an **app password** — Google Account →
+Security → 2-Step Verification → App passwords — rather than your account
+password), then run:
 
 ```
 cd backend

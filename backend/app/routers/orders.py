@@ -1,11 +1,12 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile
 from sqlalchemy.orm import Session
 
 from .. import crud, schemas
 from ..database import get_db
 from ..excel_utils import parse_orders_excel
+from ..receipts import generate_receipt_pdf
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
 
@@ -44,6 +45,19 @@ def get_order(order_id: int, db: Session = Depends(get_db)):
     return db_order
 
 
+@router.get("/{order_id}/receipt")
+def get_order_receipt(order_id: int, db: Session = Depends(get_db)):
+    db_order = crud.get_order(db, order_id)
+    if db_order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    pdf_bytes = generate_receipt_pdf(db_order)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="receipt-{order_id}.pdf"'},
+    )
+
+
 @router.put("/{order_id}", response_model=schemas.Order)
 def update_order(order_id: int, order: schemas.OrderUpdate, db: Session = Depends(get_db)):
     db_order = crud.update_order(db, order_id, order)
@@ -66,7 +80,11 @@ async def import_orders(file: UploadFile, db: Session = Depends(get_db)):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    order_ids: list[int] = []
     if orders:
-        crud.bulk_create_orders(db, orders)
+        created = crud.bulk_create_orders(db, orders)
+        order_ids = [order.OrderID for order in created]
 
-    return schemas.ImportResult(inserted=len(orders), failed=len(errors), errors=errors)
+    return schemas.ImportResult(
+        inserted=len(orders), failed=len(errors), errors=errors, order_ids=order_ids
+    )
