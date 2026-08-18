@@ -5,3 +5,12 @@ requests
 pytz
 anthropic
 pytest
+
+# Order Enquiry system
+fastapi
+uvicorn[standard]
+sqlalchemy
+psycopg2-binary
+python-multipart
+openpyxl
+httpx
