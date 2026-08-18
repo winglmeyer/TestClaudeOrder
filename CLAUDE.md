@@ -26,10 +26,14 @@ backend/app/
     sales.py       /api/sales/summary, /by-day, /top-products (dashboard data)
 
 backend/email_watcher.py   Standalone script (not part of the API process):
-  polls IMAP for unread "Order Enquiry" emails, extracts the Excel attachment,
-  POSTs it to /api/orders/import, then fetches the inserted orders back and
-  saves a plain-text receipt as a Gmail draft reply (IMAP APPEND to
-  IMAP_DRAFTS_FOLDER) — it never sends automatically.
+  polls the Gmail API (OAuth2) for unread "Order Enquiry" emails, extracts
+  the Excel attachment, POSTs it to /api/orders/import, then fetches the
+  inserted orders back and saves a plain-text receipt as a Gmail draft reply
+  (drafts.create, threaded onto the original message) — it never sends
+  automatically.
+backend/gmail_auth_setup.py   One-time interactive script (run locally, needs
+  a browser) that exchanges the Google OAuth client's credentials for a
+  refresh token to put in GOOGLE_REFRESH_TOKEN.
 
 frontend/src/
   App.jsx                    Tab switcher: Orders vs Dashboard
@@ -38,10 +42,11 @@ frontend/src/
   components/Dashboard.jsx   Stat tiles + inline-SVG bar charts (no chart library)
 ```
 
-Data flow for the email pipeline: Gmail inbox → `email_watcher.py` (IMAP) →
-`POST /api/orders/import` → SQLAlchemy insert → `email_watcher.py` reads the
-new orders back via `GET /api/orders/{id}` → drafts a reply into Gmail. The
-watcher only talks to the backend over HTTP; it has no direct DB access.
+Data flow for the email pipeline: Gmail inbox → `email_watcher.py` (Gmail
+API) → `POST /api/orders/import` → SQLAlchemy insert → `email_watcher.py`
+reads the new orders back via `GET /api/orders/{id}` → drafts a reply into
+Gmail. The watcher only talks to the backend over HTTP; it has no direct DB
+access.
 
 ## Commands
 

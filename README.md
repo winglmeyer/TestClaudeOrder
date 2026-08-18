@@ -2,7 +2,7 @@
 
 A small order enquiry app: a FastAPI backend backed by SQLite/Postgres, a React
 frontend for searching/entering/importing orders and viewing a sales
-dashboard, and an IMAP watcher that ingests Excel attachments from
+dashboard, and a Gmail API watcher that ingests Excel attachments from
 "Order Enquiry" emails, generates a PDF receipt per order, and drafts a reply
 email (saved to the mailbox's Drafts folder, never auto-sent).
 
@@ -53,30 +53,43 @@ The dev server proxies `/api` calls to the backend on port 8000.
 
 ## Email watcher (Gmail integration)
 
-Polls a mailbox by IMAP for unread emails with "Order Enquiry" in the subject,
-pulls the first `.xlsx`/`.xls` attachment from each, and POSTs it to the
-backend's `/api/orders/import` endpoint — the same path used by the frontend's
-import form. An email is marked read only after a successful import, so
-failures are retried on the next poll.
+Polls Gmail via the Gmail API for unread emails with "Order Enquiry" in the
+subject, pulls the first `.xlsx`/`.xls` attachment from each, and POSTs it to
+the backend's `/api/orders/import` endpoint — the same path used by the
+frontend's import form. An email is marked read only after a successful
+import, so failures are retried on the next poll.
 
 After a successful import, the watcher fetches the newly inserted orders back
 from the API, builds a plain-text receipt, and saves it as a **draft** reply
-(via IMAP APPEND to `IMAP_DRAFTS_FOLDER`, default `[Gmail]/Drafts`) addressed
-to the original sender — it is never sent automatically, so a person reviews
-and sends it from Gmail.
+(via `drafts.create`, threaded onto the original message) addressed to the
+original sender — it is never sent automatically, so a person reviews and
+sends it from Gmail.
 
-Copy `backend/.env.example` to `backend/.env`, fill in your Gmail IMAP
-credentials (`imap.gmail.com`, and an **app password** — Google Account →
-Security → 2-Step Verification → App passwords — rather than your account
-password), then run:
+One-time setup:
 
-```
-cd backend
-python email_watcher.py          # polls forever, on POLL_INTERVAL_SECONDS
-python email_watcher.py --once   # single pass, e.g. for a scheduled task/cron job
-```
+1. In [Google Cloud Console](https://console.cloud.google.com/) → APIs &
+   Services → Credentials, create an OAuth 2.0 Client ID (add
+   `http://localhost:8080/` to Authorized redirect URIs if it's a "Web
+   application" client; a "Desktop app" client needs no extra config) and
+   enable the Gmail API for the project.
+2. Copy `backend/.env.example` to `backend/.env` and fill in
+   `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` from that OAuth client.
+3. Run the one-time authorization script — it opens a browser consent screen
+   and prints a refresh token to add to `backend/.env`:
+   ```
+   cd backend
+   python gmail_auth_setup.py
+   ```
+4. Run the watcher:
+   ```
+   cd backend
+   python email_watcher.py          # polls forever, on POLL_INTERVAL_SECONDS
+   python email_watcher.py --once   # single pass, e.g. for a scheduled task/cron job
+   ```
 
-The backend must be running for the watcher to import successfully.
+The backend must be running for the watcher to import successfully. Treat
+`GOOGLE_CLIENT_SECRET` and `GOOGLE_REFRESH_TOKEN` as secrets — never commit
+them; they belong in `backend/.env` (gitignored) or your host's secret store.
 
 ## Tests
 
@@ -125,6 +138,8 @@ long-running/scheduled script. Options for running it in the cloud:
 - Render **Background Worker** or **Cron Job** pointed at the same repo/branch,
   running `python email_watcher.py --once` on a schedule (Cron Job) or
   `python email_watcher.py` continuously (Background Worker), with the same
-  IMAP/API env vars set on that service
+  Google OAuth/API env vars set on that service (run `gmail_auth_setup.py`
+  once locally first — the refresh token it prints is what goes in that
+  service's env vars; the interactive consent step itself can't run headless)
 - Any machine with network access to the deployed backend's `/api/orders/import`
-  URL and IMAP credentials, run via Task Scheduler/cron
+  URL and the same Google OAuth env vars, run via Task Scheduler/cron

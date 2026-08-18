@@ -1,4 +1,4 @@
-"""Poll an IMAP mailbox for "Order Enquiry" emails and import their Excel attachments.
+"""Poll Gmail for "Order Enquiry" emails and import their Excel attachments.
 
 Looks for unread emails whose subject contains SUBJECT_FILTER, extracts the
 first .xlsx/.xls attachment from each, and POSTs it to the running Order
@@ -6,37 +6,44 @@ Enquiry API's /api/orders/import endpoint. An email is only marked as read
 after its attachment has been successfully imported, so failures are retried
 on the next poll.
 
+Uses the Gmail API (OAuth2), not IMAP. Run gmail_auth_setup.py once first to
+obtain a refresh token.
+
 Configuration is read from environment variables (see .env.example):
-  IMAP_HOST, IMAP_PORT, IMAP_USER, IMAP_PASSWORD, IMAP_FOLDER,
-  SUBJECT_FILTER, API_BASE_URL, POLL_INTERVAL_SECONDS
+  GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN,
+  SUBJECT_FILTER, API_BASE_URL, POLL_INTERVAL_SECONDS, COMPANY_NAME
 
 Usage:
   python email_watcher.py          # polls forever
   python email_watcher.py --once   # single pass, e.g. for cron/Task Scheduler
 """
 
-import email
-import imaplib
+import base64
 import os
 import sys
 import time
 from email.header import decode_header
-from email.message import EmailMessage, Message
+from email.message import EmailMessage
 from email.utils import parseaddr
 
 import requests
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
-IMAP_HOST = os.environ["IMAP_HOST"]
-IMAP_PORT = int(os.environ.get("IMAP_PORT", "993"))
-IMAP_USER = os.environ["IMAP_USER"]
-IMAP_PASSWORD = os.environ["IMAP_PASSWORD"]
-IMAP_FOLDER = os.environ.get("IMAP_FOLDER", "INBOX")
-DRAFTS_FOLDER = os.environ.get("IMAP_DRAFTS_FOLDER", "[Gmail]/Drafts")
+GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
+GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
+GOOGLE_REFRESH_TOKEN = os.environ["GOOGLE_REFRESH_TOKEN"]
 SUBJECT_FILTER = os.environ.get("SUBJECT_FILTER", "Order Enquiry")
 API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "60"))
 COMPANY_NAME = os.environ.get("COMPANY_NAME", "Order Enquiry System")
 
+SCOPES = [
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.compose",
+]
 EXCEL_EXTENSIONS = (".xlsx", ".xls")
 
 
@@ -51,16 +58,53 @@ def decode_subject(raw_subject: str) -> str:
     return decoded
 
 
-def find_excel_attachment(msg: Message) -> tuple[str, bytes] | None:
-    for part in msg.walk():
-        filename = part.get_filename()
-        if not filename:
+def get_gmail_service():
+    creds = Credentials(
+        token=None,
+        refresh_token=GOOGLE_REFRESH_TOKEN,
+        client_id=GOOGLE_CLIENT_ID,
+        client_secret=GOOGLE_CLIENT_SECRET,
+        token_uri="https://oauth2.googleapis.com/token",
+        scopes=SCOPES,
+    )
+    creds.refresh(Request())
+    return build("gmail", "v1", credentials=creds, cache_discovery=False)
+
+
+def get_header(headers: list[dict], name: str) -> str:
+    for header in headers:
+        if header.get("name", "").lower() == name.lower():
+            return header.get("value", "")
+    return ""
+
+
+def find_excel_attachment(service, msg_id: str, payload: dict) -> tuple[str, bytes] | None:
+    stack = list(payload.get("parts") or [])
+    while stack:
+        part = stack.pop()
+        sub_parts = part.get("parts")
+        if sub_parts:
+            stack.extend(sub_parts)
             continue
-        decoded_name = decode_subject(filename)
-        if decoded_name.lower().endswith(EXCEL_EXTENSIONS):
-            payload = part.get_payload(decode=True)
-            if payload:
-                return decoded_name, payload
+
+        filename = decode_subject(part.get("filename") or "")
+        if not filename.lower().endswith(EXCEL_EXTENSIONS):
+            continue
+
+        body = part.get("body", {})
+        data = body.get("data")
+        if data is None and body.get("attachmentId"):
+            attachment = (
+                service.users()
+                .messages()
+                .attachments()
+                .get(userId="me", messageId=msg_id, id=body["attachmentId"])
+                .execute()
+            )
+            data = attachment.get("data")
+        if data:
+            padded = data + "=" * (-len(data) % 4)
+            return filename, base64.urlsafe_b64decode(padded)
     return None
 
 
@@ -109,90 +153,90 @@ def build_receipt_text(order_ids: list[int]) -> str:
     return "\n".join(lines)
 
 
-def create_draft_reply(conn: imaplib.IMAP4_SSL, to_addr: str, subject: str, body: str) -> None:
-    """Save a reply as a draft in the Gmail Drafts folder (not sent automatically)."""
+def create_draft_reply(
+    service, thread_id: str, to_addr: str, subject: str, body: str, in_reply_to: str
+) -> None:
+    """Save a reply as a Gmail draft (not sent automatically)."""
     if not to_addr:
         print("  No sender address found; skipping draft.")
         return
 
     msg = EmailMessage()
-    msg["From"] = IMAP_USER
     msg["To"] = to_addr
     msg["Subject"] = subject
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+        msg["References"] = in_reply_to
     msg.set_content(body)
 
-    status, _ = conn.append(
-        DRAFTS_FOLDER, "\\Draft", imaplib.Time2Internaldate(time.time()), msg.as_bytes()
-    )
-    if status == "OK":
-        print(f"  Draft reply saved to {DRAFTS_FOLDER} for {to_addr}.")
-    else:
-        print(f"  Failed to save draft reply: {status}")
-
-
-def process_mailbox() -> None:
-    conn = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     try:
-        conn.login(IMAP_USER, IMAP_PASSWORD)
-        conn.select(IMAP_FOLDER)
+        service.users().drafts().create(
+            userId="me", body={"message": {"raw": raw, "threadId": thread_id}}
+        ).execute()
+        print(f"  Draft reply saved for {to_addr}.")
+    except HttpError as exc:
+        print(f"  Failed to save draft reply: {exc}")
 
-        status, data = conn.search(None, "UNSEEN")
-        if status != "OK":
-            print(f"IMAP search failed: {status}")
-            return
 
-        message_ids = data[0].split()
-        if not message_ids:
-            print("No new emails.")
-            return
+def process_mailbox(service) -> None:
+    query = f'is:unread subject:"{SUBJECT_FILTER}"'
+    response = service.users().messages().list(userId="me", q=query).execute()
+    messages = response.get("messages", [])
+    if not messages:
+        print("No new emails.")
+        return
 
-        for msg_id in message_ids:
-            status, msg_data = conn.fetch(msg_id, "(BODY.PEEK[])")
-            if status != "OK" or not msg_data or msg_data[0] is None:
-                continue
+    for meta in messages:
+        msg_id = meta["id"]
+        msg = service.users().messages().get(userId="me", id=msg_id, format="full").execute()
+        headers = msg["payload"].get("headers", [])
+        subject = decode_subject(get_header(headers, "Subject"))
 
-            raw_email = msg_data[0][1]
-            msg = email.message_from_bytes(raw_email)
-            subject = decode_subject(msg.get("Subject", ""))
+        if SUBJECT_FILTER.lower() not in subject.lower():
+            continue
 
-            if SUBJECT_FILTER.lower() not in subject.lower():
-                continue
+        print(f"Processing email: {subject!r}")
+        attachment = find_excel_attachment(service, msg_id, msg["payload"])
+        if attachment is None:
+            print("  No Excel attachment found; leaving unread.")
+            continue
 
-            print(f"Processing email: {subject!r}")
-            attachment = find_excel_attachment(msg)
-            if attachment is None:
-                print("  No Excel attachment found; leaving unread.")
-                continue
+        filename, content = attachment
+        print(f"  Found attachment: {filename}")
+        result = import_attachment(filename, content)
+        if result is None:
+            continue
 
-            filename, content = attachment
-            print(f"  Found attachment: {filename}")
-            result = import_attachment(filename, content)
-            if result is not None:
-                conn.store(msg_id, "+FLAGS", "\\Seen")
-                order_ids = result.get("order_ids", [])
-                if order_ids:
-                    _, sender_addr = parseaddr(msg.get("From", ""))
-                    receipt_text = build_receipt_text(order_ids)
-                    create_draft_reply(
-                        conn,
-                        to_addr=sender_addr,
-                        subject=f"Re: {subject} - Receipt",
-                        body=receipt_text,
-                    )
-    finally:
-        try:
-            conn.close()
-        except imaplib.IMAP4.error:
-            pass
-        conn.logout()
+        service.users().messages().modify(
+            userId="me", id=msg_id, body={"removeLabelIds": ["UNREAD"]}
+        ).execute()
+
+        order_ids = result.get("order_ids", [])
+        if not order_ids:
+            continue
+
+        _, sender_addr = parseaddr(get_header(headers, "From"))
+        receipt_text = build_receipt_text(order_ids)
+        create_draft_reply(
+            service,
+            thread_id=msg["threadId"],
+            to_addr=sender_addr,
+            subject=f"Re: {subject} - Receipt",
+            body=receipt_text,
+            in_reply_to=get_header(headers, "Message-ID"),
+        )
 
 
 def main() -> None:
     run_once = "--once" in sys.argv
+    service = get_gmail_service()
 
     while True:
         try:
-            process_mailbox()
+            process_mailbox(service)
+        except HttpError as exc:
+            print(f"Gmail API error: {exc}")
         except Exception as exc:  # noqa: BLE001 - keep polling despite transient errors
             print(f"Error while processing mailbox: {exc}")
 
